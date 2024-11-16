@@ -67,9 +67,12 @@ static void MX_TIM2_Init(void);
 static void MX_TIM5_Init(void);
 static void MX_I2C2_Init(void);
 /* USER CODE BEGIN PFP */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim);
 void read_accelerator(int16_t* x_acc, int16_t* y_acc, int16_t* z_acc);
 void set_buzzer_tone(uint16_t tone);
 void set_pwm_frequency(uint32_t frequency);
+uint8_t read_distance(){return VL6180X_readRange();}
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -117,6 +120,7 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  HAL_TIM_Base_Start_IT(&htim2);
   //start conversion
   uint8_t start_conversion_reg = 0b01100111;
   HAL_I2C_Mem_Write(&hi2c1, ACC_ADDR, LSM303C_CTRL_REG1_A, 1, &start_conversion_reg, 1, HAL_MAX_DELAY);
@@ -124,11 +128,14 @@ int main(void)
   VL6180X_Init(&hi2c2);
   while (1)
   {
-	  HAL_Delay(100);
-	  read_accelerator((int16_t*)&x_acc_val, (int16_t*)&y_acc_val, (int16_t*)&z_acc_val);
-	  uint8_t msg[100];
-	  uint16_t msg_len = sprintf((char*)msg, "X:%d, Y:%d, Z:%d\n\r", x_acc_val, y_acc_val, z_acc_val);
-	  HAL_UART_Transmit(&huart2, (uint8_t*)msg, msg_len, 1000);
+//	  HAL_Delay(100);
+//	  read_accelerator((int16_t*)&x_acc_val, (int16_t*)&y_acc_val, (int16_t*)&z_acc_val);
+//	  uint8_t msg[100];
+//	  uint16_t msg_len = sprintf((char*)msg, "X:%d, Y:%d, Z:%d\n\r", x_acc_val, y_acc_val, z_acc_val);
+//	  HAL_UART_Transmit(&huart2, (uint8_t*)msg, msg_len, 1000);
+//	  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_13);
+//	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);
+//	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_RESET);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -403,10 +410,10 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : PB13 PB14 PB15 */
-  GPIO_InitStruct.Pin = GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15;
+  /*Configure GPIO pin : PB13 */
+  GPIO_InitStruct.Pin = GPIO_PIN_13;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -417,6 +424,12 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
+	if(htim == &htim2){
+		//800Hz
+	}
+}
 void read_accelerator(int16_t* x_acc, int16_t* y_acc, int16_t* z_acc){
 	uint8_t* x_acc_addr = (uint8_t*)x_acc;
 	uint8_t* y_acc_addr = (uint8_t*)y_acc;
