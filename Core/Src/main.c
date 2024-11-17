@@ -63,6 +63,8 @@ enum Skibidibi_States{
 	FALLEN=2,
 	ALARM=3,
 };
+static int fallen_enter_time=0;
+static int current_program_time=0;
 static enum Skibidibi_States STATE=NORMAL;
 
 
@@ -143,7 +145,7 @@ int main(void)
 	  uint8_t msg[100];
 	  uint16_t msg_len = sprintf((char*)msg, "X:%d, Y:%d, Z:%d\n\r", x_acc_val, y_acc_val, z_acc_val);
 	  HAL_UART_Transmit(&huart2, (uint8_t*)msg, msg_len, 1000);
-
+	  current_program_time=HAL_GetTick();
 //	  set_diode_frequency(3,90);
 //	  for( int i=0;i<100;i++){
 //		  set_diode_frequency(4,i);
@@ -151,10 +153,36 @@ int main(void)
 //	  }
 
 	  calculate_fall_from_acc();
-	  if (STATE==FALLEN){
-		  uint16_t msg_len2 = sprintf((char*)msg, "STATE:FALLEN \r\n");
+	  if (STATE==NORMAL){
+		  uint16_t msg_len2 = sprintf((char*)msg, "STATE: NORMAL  \r\n");
 		  HAL_UART_Transmit(&huart2, (uint8_t*)msg, msg_len2, 1000);
 	  }
+	  if (STATE==FALLEN){
+		  uint16_t msg_len2 = sprintf((char*)msg, "STATE: FALLEN \r\n");
+		  HAL_UART_Transmit(&huart2, (uint8_t*)msg, msg_len2, 1000);
+	  }
+
+	  if (STATE==ALARM){
+		  uint16_t msg_len2 = sprintf((char*)msg, "STATE: ALARM \r\n");
+		  HAL_UART_Transmit(&huart2, (uint8_t*)msg, msg_len2, 1000);
+	  }
+
+	  if ((STATE==FALLEN)&&((current_program_time-fallen_enter_time)>10000)){
+		  STATE=ALARM;
+	  }
+
+
+	  if (STATE==NORMAL){
+		  set_diode_frequency(1,10);
+		  //set_buzzer_tone(60);
+	  }
+
+	  if (STATE==ALARM){
+		  set_diode_frequency(10,50);
+		  //set_buzzer_tone(60);
+	  }
+
+
 
     /* USER CODE END WHILE */
 
@@ -342,7 +370,7 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 49999;
+  htim3.Init.Prescaler = 49999*2;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim3.Init.Period = 20000-1;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -619,6 +647,8 @@ void calculate_fall_from_acc(){
 	float dy=new_median_filter_mean_X-median_filter_mean_X;
 	if (dy>ACCELOMETER_THRESHOLD){
 		STATE=FALLEN;
+		if(fallen_enter_time==0)
+			fallen_enter_time=HAL_GetTick();
 	}
 
 	if (y_acc_val<0)
@@ -629,6 +659,8 @@ void calculate_fall_from_acc(){
 	dy=new_median_filter_mean_Y-median_filter_mean_Y;
 	if (dy>ACCELOMETER_THRESHOLD){
 		STATE=FALLEN;
+		if(fallen_enter_time==0)
+			fallen_enter_time=HAL_GetTick();
 	}
 
 	if (z_acc_val<0)
@@ -639,6 +671,8 @@ void calculate_fall_from_acc(){
 	dy=new_median_filter_mean_Z-median_filter_mean_Z;
 	if (dy>ACCELOMETER_THRESHOLD){
 		STATE=FALLEN;
+		if(fallen_enter_time==0)
+			fallen_enter_time=HAL_GetTick();
 	}
 
 }
