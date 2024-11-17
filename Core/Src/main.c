@@ -37,6 +37,8 @@
 
 #define MAG_ADDR (0b0011110 << 1)
 
+#define MEDIAN_FILTER_LENGTH 5
+#define ACCELOMETER_THRESHOLD 6000
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -49,12 +51,20 @@ I2C_HandleTypeDef hi2c1;
 I2C_HandleTypeDef hi2c2;
 
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim5;
 
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 volatile int16_t x_acc_val, y_acc_val, z_acc_val;
+enum Skibidibi_States{
+	NORMAL=1,
+	FALLEN=2,
+	ALARM=3,
+};
+static enum Skibidibi_States STATE=NORMAL;
+
 
 /* USER CODE END PV */
 
@@ -66,10 +76,13 @@ static void MX_USART2_UART_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM5_Init(void);
 static void MX_I2C2_Init(void);
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 void read_accelerator(int16_t* x_acc, int16_t* y_acc, int16_t* z_acc);
 void set_buzzer_tone(uint16_t tone);
 void set_pwm_frequency(uint32_t frequency);
+void set_diode_frequency(int frequency,int pwm_width);
+void calculate_fall_from_acc();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -111,6 +124,7 @@ int main(void)
   MX_TIM2_Init();
   MX_TIM5_Init();
   MX_I2C2_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -124,11 +138,24 @@ int main(void)
   VL6180X_Init(&hi2c2);
   while (1)
   {
-	  HAL_Delay(100);
+	  HAL_Delay(50);
 	  read_accelerator((int16_t*)&x_acc_val, (int16_t*)&y_acc_val, (int16_t*)&z_acc_val);
 	  uint8_t msg[100];
 	  uint16_t msg_len = sprintf((char*)msg, "X:%d, Y:%d, Z:%d\n\r", x_acc_val, y_acc_val, z_acc_val);
 	  HAL_UART_Transmit(&huart2, (uint8_t*)msg, msg_len, 1000);
+
+//	  set_diode_frequency(3,90);
+//	  for( int i=0;i<100;i++){
+//		  set_diode_frequency(4,i);
+//		  HAL_Delay(50);
+//	  }
+
+	  calculate_fall_from_acc();
+	  if (STATE==FALLEN){
+		  uint16_t msg_len2 = sprintf((char*)msg, "STATE:FALLEN \r\n");
+		  HAL_UART_Transmit(&huart2, (uint8_t*)msg, msg_len2, 1000);
+	  }
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -292,6 +319,65 @@ static void MX_TIM2_Init(void)
   /* USER CODE BEGIN TIM2_Init 2 */
 
   /* USER CODE END TIM2_Init 2 */
+
+}
+
+/**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 49999;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 20000-1;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+  HAL_TIM_MspPostInit(&htim3);
 
 }
 
@@ -481,7 +567,81 @@ void set_pwm_frequency(uint32_t frequency) {
     // Restart the timer
     HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_1);
 }
+void set_diode_frequency(int frequency,int pwm_width){
+	/*
+	 * frequency sets frequency
+	 * duty length is o
+	 */
+	   uint32_t timer_clock = 100000000; // Main timer clock frequency (100 MHz)
+	   uint32_t prescaler = 0;
+	   uint32_t auto_reload = 0;
 
+	    // Stop the timer to safely reconfigure
+	    HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_1);
+
+	    // Calculate the appropriate prescaler and auto-reload value
+	    if (frequency > 0 && frequency <= 20000) {
+	        // Calculate total timer division factor needed to achieve the desired frequency
+	        uint32_t division_factor = timer_clock / frequency;
+
+	        // Split division factor into prescaler and ARR
+	        // Prescaler should be <= 65535, so limit accordingly
+	        prescaler = (division_factor - 1) / 20000; // Keep ARR <= 20000
+	        auto_reload = (division_factor / (prescaler + 1)) - 1;
+
+	        if (auto_reload > 20000) {
+	            auto_reload = 20000 - 1; // Limit ARR to 20000 max
+	        }
+	        int pwm_width2=(pwm_width)*(auto_reload)/100;
+	        // Update timer settings
+	        __HAL_TIM_SET_PRESCALER(&htim3, prescaler);
+	        __HAL_TIM_SET_AUTORELOAD(&htim3, auto_reload);
+
+	        // Set Compare value for 50% duty cycle
+	        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pwm_width2);
+	    }
+
+	    // Restart the timer
+	    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+
+
+}
+
+void calculate_fall_from_acc(){
+
+	int new_data=0;
+
+	if (x_acc_val<0)
+		new_data=-x_acc_val;
+
+	static float median_filter_mean_X=0;
+	float new_median_filter_mean_X=((MEDIAN_FILTER_LENGTH-1)*median_filter_mean_X+new_data)/MEDIAN_FILTER_LENGTH;
+	float dy=new_median_filter_mean_X-median_filter_mean_X;
+	if (dy>ACCELOMETER_THRESHOLD){
+		STATE=FALLEN;
+	}
+
+	if (y_acc_val<0)
+		new_data=-y_acc_val;
+
+	static float median_filter_mean_Y=0;
+	float new_median_filter_mean_Y=((MEDIAN_FILTER_LENGTH-1)*median_filter_mean_Y+new_data)/MEDIAN_FILTER_LENGTH;
+	dy=new_median_filter_mean_Y-median_filter_mean_Y;
+	if (dy>ACCELOMETER_THRESHOLD){
+		STATE=FALLEN;
+	}
+
+	if (z_acc_val<0)
+		new_data=-z_acc_val;
+
+	static float median_filter_mean_Z=0;
+	float new_median_filter_mean_Z=((MEDIAN_FILTER_LENGTH-1)*median_filter_mean_Z+new_data)/MEDIAN_FILTER_LENGTH;
+	dy=new_median_filter_mean_Z-median_filter_mean_Z;
+	if (dy>ACCELOMETER_THRESHOLD){
+		STATE=FALLEN;
+	}
+
+}
 
 /* USER CODE END 4 */
 
