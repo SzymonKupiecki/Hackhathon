@@ -23,6 +23,9 @@
 /* USER CODE BEGIN Includes */
 #include "lsm303c_headers.h"
 #include "VL6180X.h"
+#define ARM_MATH_CM4
+#include "arm_math.h"
+#include <stdio.h>
 
 /* USER CODE END Includes */
 
@@ -38,6 +41,8 @@
 #define MAG_ADDR (0b0011110 << 1)
 
 #define ADC_BUFFER_LENGTH 2048
+#define FFT_BUFFER_SIZE 1024
+#define SAMPLE_RATE_HZ 6103
 
 /* USER CODE END PD */
 
@@ -63,6 +68,14 @@ UART_HandleTypeDef huart2;
 volatile int16_t x_acc_val, y_acc_val, z_acc_val;
 uint16_t adc_buffer[ADC_BUFFER_LENGTH]; //adc_buffer[0:adc_len/2 - 1]
 volatile uint8_t first_half_active=0;
+
+#define rfft_fast_instance_f32 fftHandler;
+arm_rfft_fast_instance_f32 fftHandler;
+
+float fftBufIn[FFT_BUFFER_SIZE];
+float fftBufOut[FFT_BUFFER_SIZE];
+
+uint8_t fftFlag = 0;
 
 /* USER CODE END PV */
 
@@ -131,6 +144,9 @@ int main(void)
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
 
+  arm_rfft_fast_init_f32(&fftHandler, FFT_BUFFER_SIZE);
+
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -144,13 +160,35 @@ int main(void)
   VL6180X_Init(&hi2c2);
   //DMA ADC
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, 2048);
+
+  float peakVal = 0.0f;
+  uint16_t peakHz = 0;
+
   while (1)
   {
-//	  HAL_Delay(100);
-//	  read_accelerator((int16_t*)&x_acc_val, (int16_t*)&y_acc_val, (int16_t*)&z_acc_val);
-//	  uint8_t msg[100];
-//	  uint16_t msg_len = sprintf((char*)msg, "X:%d, Y:%d, Z:%d\n\r", x_acc_val, y_acc_val, z_acc_val);
-//	  HAL_UART_Transmit(&huart2, (uint8_t*)msg, msg_len, 1000);
+	  //HAL_Delay(100);
+	  read_accelerator((int16_t*)&x_acc_val, (int16_t*)&y_acc_val, (int16_t*)&z_acc_val);
+	  uint8_t msg[150];
+	  uint8_t distance = 0;//read_distance();
+	  if (fftFlag) {
+		  peakVal = 0.0f;
+		  peakHz = 0.0f;
+
+		  uint16_t freqIndex = 0;
+
+		  for (uint16_t index = 0; index < FFT_BUFFER_SIZE; index += 2) {
+			  float curVal = sqrtf((fftBufOut[index] * fftBufOut[index]) + (fftBufOut[index + 1] + fftBufOut[index + 1]));
+
+			  if (curVal > peakVal) {
+				  peakVal = curVal;
+				  peakHz = (uint16_t) (freqIndex * SAMPLE_RATE_HZ / ((float) FFT_BUFFER_SIZE));
+			  }
+			  freqIndex++;
+		  }
+
+	  }
+	  uint16_t msg_len = sprintf((char*)msg, "X:%d, Y:%d, Z:%d; Distance:%d; PeakHz:%d\n\r", x_acc_val, y_acc_val, z_acc_val, distance, peakHz);
+	  HAL_UART_Transmit(&huart2, (uint8_t*)msg, msg_len, 1000);
 //	  HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_13);
 //	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);
 //	  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_RESET);
@@ -557,12 +595,31 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc){
 	first_half_active = first_half_active == 0;
+	static float leftIn, rightIn;
+	uint8_t fftIndex = 0;
+
+	for (uint8_t n =0; n < (ADC_BUFFER_LENGTH/2) - 1; n += 2) {
+		leftIn = (float) adc_buffer[n];
+		rightIn = (float) adc_buffer[n+1];
+
+		fftBufIn[fftIndex] = leftIn;
+		fftIndex++;
+
+		if (fftIndex == FFT_BUFFER_SIZE) {
+			arm_rfft_fast_f32(&fftHandler, &fftBufIn, &fftBufOut, 0);
+			fftFlag = 1;
+			fftIndex = 0;
+		}
+	}
+
 }
+
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 	if(htim == &htim2){
 		//800Hz
 	}
 }
+
 void read_accelerator(int16_t* x_acc, int16_t* y_acc, int16_t* z_acc){
 	uint8_t* x_acc_addr = (uint8_t*)x_acc;
 	uint8_t* y_acc_addr = (uint8_t*)y_acc;
